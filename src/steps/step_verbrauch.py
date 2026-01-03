@@ -12,6 +12,15 @@ BRENNWERT_FAKTOREN = {
     "Strom": 1.0, "Fernwärme": 1.0, "Sonstiges": 1.0
 }
 
+# Warmwasser-Optionen als Konstanten (verhindert Tippfehler)
+NICHT_AUSGEWAEHLT = "Bitte wählen..."
+WW_INKLUSIVE = "Ja, inklusive"
+WW_PAUSCHALE = "Nein, Pauschale"
+WW_SEPARAT = "Nein, separat"
+WW_NUR = "Nur Warmwasser-Verbrauch (keine Heizung)"
+
+WW_OPTIONEN = [NICHT_AUSGEWAEHLT, WW_INKLUSIVE, WW_PAUSCHALE, WW_SEPARAT, WW_NUR]
+
 # --- HILFSFUNKTIONEN ---
 def get_verbrauchsperioden():
     heute = date.today()
@@ -25,6 +34,33 @@ def get_verbrauchsperioden():
         perioden.append((label, start, ende))
     return perioden
 
+def format_entry_display(v):
+    """Formatiert einen Verbrauchseintrag für die Historie-Anzeige."""
+    info = f"**{v['Datum'].strftime('%d.%m.%Y')}** | "
+    
+    if v['Warmwasser'] == WW_NUR:
+        # Reiner WW-Eintrag
+        info += (f"💧 Reiner WW-Eintrag ({v['Warmwasser_Energieart']}): "
+                f"{v['Warmwasser_Menge_Separat']} {v['Warmwasser_Einheit']} "
+                f"({v['kWh_Warmwasser']} kWh)")
+    else:
+        # Standard-Eintrag mit Heizung
+        if v['Energieträger'] != "Keiner (reiner WW-Eintrag)":
+            info += (f"🔥 {v['Energieträger']}: {v['Menge']} {v['Einheit']} "
+                    f"({v['kWh_Heizung']} kWh)")
+        
+        # Warmwasser-Zusätze
+        if v['Warmwasser'] == WW_INKLUSIVE:
+            info += " (💧 WW inklusiv)"
+        elif v['Warmwasser'] == WW_SEPARAT:
+            info += (f" + 💧 WW ({v['Warmwasser_Energieart']}): "
+                    f"{v['Warmwasser_Menge_Separat']} {v['Warmwasser_Einheit']} "
+                    f"({v['kWh_Warmwasser']} kWh)")
+        elif v['Warmwasser'] == WW_PAUSCHALE:
+            info += f" + 💧 WW (Pauschale {v['Warmwasser_Energieart']})"
+    
+    return info
+
 # --- LOGIK FUNKTIONEN (CALLBACKS) ---
 def prepare_edit(idx, label, entry_idx):
     """Befüllt die Eingabemaske mit Daten aus einem bestehenden Eintrag."""
@@ -32,12 +68,12 @@ def prepare_edit(idx, label, entry_idx):
     
     # Widget-Keys im State setzen (muss im Callback passieren!)
     st.session_state[f"datum_{idx}"] = v["Datum"]
-    st.session_state[f"et_{idx}"] = v["Energieträger"] if v["Energieträger"] != "Keiner (reiner WW-Eintrag)" else "Bitte wählen..."
+    st.session_state[f"et_{idx}"] = v["Energieträger"] if v["Energieträger"] != "Keiner (reiner WW-Eintrag)" else NICHT_AUSGEWAEHLT
     st.session_state[f"menge_{idx}"] = v["Menge"]
     st.session_state[f"ww_{idx}"] = v["Warmwasser"]
     
     if v.get("Warmwasser_Energieart"):
-        if v["Warmwasser"] == "Nein, die Warmwasserbereitung erfolgt separat (Pauschale)":
+        if v["Warmwasser"] == WW_PAUSCHALE:
             st.session_state[f"ww_et_p_{idx}"] = v["Warmwasser_Energieart"]
         else:
             st.session_state[f"ww_et_s_{idx}"] = v["Warmwasser_Energieart"]
@@ -50,35 +86,60 @@ def cancel_edit(idx):
     """Setzt die Eingabemaske zurück."""
     st.session_state[f"edit_mode_{idx}"] = False
     st.session_state[f"active_edit_idx_{idx}"] = None
-    st.session_state[f"et_{idx}"] = "Bitte wählen..."
+    st.session_state[f"et_{idx}"] = NICHT_AUSGEWAEHLT
     st.session_state[f"menge_{idx}"] = 0.0
-    st.session_state[f"ww_{idx}"] = "Bitte wählen..."
+    st.session_state[f"ww_{idx}"] = NICHT_AUSGEWAEHLT
 
 def handle_ww_change(idx):
     """Setzt Heizungs-Felder zurück, wenn nur WW gewählt wurde."""
-    if st.session_state[f"ww_{idx}"] == "Nur Warmwasser-Verbrauch (keine Heizung)":
-        st.session_state[f"et_{idx}"] = "Bitte wählen..."
+    if st.session_state[f"ww_{idx}"] == WW_NUR:
+        st.session_state[f"et_{idx}"] = NICHT_AUSGEWAEHLT
         st.session_state[f"menge_{idx}"] = 0.0
 
 def add_to_temp_and_reset(idx, label):
-    """Speichert oder aktualisiert den Eintrag und setzt die Maske zurück."""
+    """Speichert oder aktualisiert den Eintrag nach Validierung."""
     d = st.session_state[f"datum_{idx}"]
     et = st.session_state[f"et_{idx}"]
     m = st.session_state[f"menge_{idx}"]
     ww = st.session_state[f"ww_{idx}"]
-    is_pure_ww = (ww == "Nur Warmwasser-Verbrauch (keine Heizung)")
+    is_pure_ww = (ww == WW_NUR)
+    
+    # ===== VALIDIERUNG =====
+    # 1. Warmwasser-Konfiguration muss gewählt sein
+    if ww == NICHT_AUSGEWAEHLT:
+        st.session_state[f"error_msg_{idx}"] = "⚠️ Bitte wähle eine Warmwasser-Konfiguration."
+        return
+    
+    # 2. Bei Heizungs-Einträgen: Energieträger und Menge prüfen
+    if not is_pure_ww:
+        if et == NICHT_AUSGEWAEHLT:
+            st.session_state[f"error_msg_{idx}"] = "⚠️ Bitte wähle einen Energieträger für die Heizung."
+            return
+        if m <= 0:
+            st.session_state[f"error_msg_{idx}"] = "⚠️ Die Heizungs-Menge muss größer als 0 sein."
+            return
     
     ww_et, ww_m = None, 0.0
     
-    # WICHTIG: Die Texte hier müssen exakt mit der selectbox übereinstimmen
-    if ww == "Nein, Pauschale":
+    # 3. Warmwasser-Daten sammeln und validieren
+    if ww == WW_PAUSCHALE:
         ww_et = st.session_state.get(f"ww_et_p_{idx}")
-        # Bei Pauschale gibt es oft keine Menge, falls doch, hier ergänzen
-    elif ww in ["Nein, separat", "Nur Warmwasser-Verbrauch (keine Heizung)"]:
+        if not ww_et or ww_et == NICHT_AUSGEWAEHLT:
+            st.session_state[f"error_msg_{idx}"] = "⚠️ Bitte wähle eine Energieart für die WW-Pauschale."
+            return
+            
+    elif ww in [WW_SEPARAT, WW_NUR]:
         ww_et = st.session_state.get(f"ww_et_s_{idx}")
         ww_m = st.session_state.get(f"ww_menge_s_{idx}", 0.0)
+        
+        if not ww_et or ww_et == NICHT_AUSGEWAEHLT:
+            st.session_state[f"error_msg_{idx}"] = "⚠️ Bitte wähle einen Energieträger für Warmwasser."
+            return
+        if ww_m <= 0:
+            st.session_state[f"error_msg_{idx}"] = "⚠️ Die Warmwasser-Menge muss größer als 0 sein."
+            return
 
-    # Berechnung der kWh
+    # ===== BERECHNUNG =====
     kwh_hz = m * BRENNWERT_FAKTOREN.get(et, 1.0) if not is_pure_ww else 0.0
     kwh_ww = ww_m * BRENNWERT_FAKTOREN.get(ww_et, 1.0) if ww_et in BRENNWERT_FAKTOREN else 0.0
 
@@ -95,13 +156,17 @@ def add_to_temp_and_reset(idx, label):
         "kWh_Warmwasser": round(kwh_ww, 2)
     }
 
-    # Speichern in die Liste
+    # ===== SPEICHERN =====
     edit_idx = st.session_state.get(f"active_edit_idx_{idx}")
     if st.session_state.get(f"edit_mode_{idx}", False) and edit_idx is not None:
         st.session_state.temp_perioden_data[label][edit_idx] = new_entry
+        st.session_state[f"success_msg_{idx}"] = "✅ Eintrag erfolgreich aktualisiert!"
     else:
         st.session_state.temp_perioden_data[label].append(new_entry)
+        st.session_state[f"success_msg_{idx}"] = "✅ Eintrag erfolgreich hinzugefügt!"
 
+    # Fehlermeldung löschen bei Erfolg
+    st.session_state[f"error_msg_{idx}"] = None
     cancel_edit(idx)
 
 # --- HAUPTFUNKTION ---
@@ -142,26 +207,38 @@ def step_verbrauch():
             with st.container(border=True):
                 st.markdown("🔥 **Energieverbrauch hinzufügen**" if not is_ed else "📝 **Eintrag bearbeiten**")
                 
+                # Fehler- und Erfolgsmeldungen anzeigen
+                if f"error_msg_{idx}" in st.session_state and st.session_state[f"error_msg_{idx}"]:
+                    st.error(st.session_state[f"error_msg_{idx}"])
+                if f"success_msg_{idx}" in st.session_state and st.session_state[f"success_msg_{idx}"]:
+                    st.success(st.session_state[f"success_msg_{idx}"])
+                    # Erfolg nach Anzeige löschen
+                    st.session_state[f"success_msg_{idx}"] = None
+                
                 c1, c2, c3 = st.columns([2,2,2])
-                c1.date_input("Ablesedatum", key=f"datum_{idx}")
-                ww_sel = st.selectbox(
+                c1.date_input("Ablesedatum", key=f"datum_{idx}", min_value=start, max_value=ende)
+                
+                # Energieträger zuerst
+                et_options = [NICHT_AUSGEWAEHLT] + list(ENERGIETRAEGER_MAP.keys())
+                c2.selectbox("Energieträger", et_options, key=f"et_{idx}")
+                
+                # Warmwasser-Konfiguration danach
+                ww_sel = c3.selectbox(
                     "Warmwasser-Konfiguration", 
-                    ["Bitte wählen...", "Ja, inklusive", "Nein, Pauschale", "Nein, separat", "Nur Warmwasser-Verbrauch (keine Heizung)"], 
+                    WW_OPTIONEN, 
                     key=f"ww_{idx}",
-                    on_change=handle_ww_change,  # Callback hinzufügen
-                    args=(idx,)                   # Index übergeben
+                    on_change=handle_ww_change,
+                    args=(idx,)
                 )
                 
-                dis_hz = (ww_sel == "Nur Warmwasser-Verbrauch (keine Heizung)")
-                et_options = ["Bitte wählen..."] + list(ENERGIETRAEGER_MAP.keys())
-                c2.selectbox("Energieträger", et_options, key=f"et_{idx}", disabled=dis_hz)
+                dis_hz = (ww_sel == WW_NUR)
                 einheit_hz = ENERGIETRAEGER_MAP.get(st.session_state.get(f"et_{idx}"), "Einheit")
                 c3.number_input(f"Menge ({einheit_hz})", min_value=0.0, step=0.1, key=f"menge_{idx}", disabled=dis_hz)
 
                 # Dynamische WW-Felder
-                if ww_sel == "Nein, Pauschale":
-                    st.selectbox("Energieart (WW-Pauschale)", ["Bitte wählen...", "Strom", "Erdgas", "Heizöl"], key=f"ww_et_p_{idx}")
-                elif ww_sel in ["Nein, separat", "Nur Warmwasser-Verbrauch (keine Heizung)"]:
+                if ww_sel == WW_PAUSCHALE:
+                    st.selectbox("Energieart (WW-Pauschale)", [NICHT_AUSGEWAEHLT, "Strom", "Erdgas", "Heizöl"], key=f"ww_et_p_{idx}")
+                elif ww_sel in [WW_SEPARAT, WW_NUR]:
                     cw1, cw2 = st.columns(2)
                     cw1.selectbox("WW-Energieträger", et_options, key=f"ww_et_s_{idx}")
                     ww_ein = ENERGIETRAEGER_MAP.get(st.session_state.get(f"ww_et_s_{idx}"), "Einheit")
@@ -179,33 +256,12 @@ def step_verbrauch():
                 st.write("---")
                 st.markdown(f"⏳ **Vorgemerkt für {label}:**")
                 total_kwh = 0.0
-                # --- 3. HISTORIE ---
                 for i, v in enumerate(entries):
                     total_kwh += v['kWh_Heizung'] + v['kWh_Warmwasser']
                     cols = st.columns([6, 1, 1])
                     
-                    # Basis-Info (Datum)
-                    info = f"**{v['Datum'].strftime('%d.%m.%Y')}** | "
-                    
-                    # FALLUNTERSCHEIDUNG
-                    if v['Warmwasser'] == "Nur Warmwasser-Verbrauch (keine Heizung)":
-                        # Format: 💧 Reiner WW-Eintrag (Strom): 1000.0 kWh (1000.0 kWh)
-                        info += f"💧 Reiner WW-Eintrag ({v['Warmwasser_Energieart']}): {v['Warmwasser_Menge_Separat']} {v['Warmwasser_Einheit']} ({v['kWh_Warmwasser']} kWh)"
-                    
-                    else:
-                        # Standard-Eintrag mit Heizung
-                        if v['Energieträger'] != "Keiner (reiner WW-Eintrag)":
-                            info += f"🔥 {v['Energieträger']}: {v['Menge']} {v['Einheit']} ({v['kWh_Heizung']} kWh)"
-                        
-                        # Warmwasser-Zusätze für Heizungs-Einträge
-                        if v['Warmwasser'] == "Ja, inklusive":
-                            info += " (💧 WW inklusiv)"
-                        elif v['Warmwasser'] == "Nein, separat":
-                            info += f" + 💧 WW ({v['Warmwasser_Energieart']}): {v['Warmwasser_Menge_Separat']} {v['Warmwasser_Einheit']} ({v['kWh_Warmwasser']} kWh)"
-                        elif v['Warmwasser'] == "Nein, Pauschale":
-                            info += f" + 💧 WW (Pauschale {v['Warmwasser_Energieart']})"
-
-                    cols[0].info(info)
+                    # Formatierte Anzeige mit ausgelagerter Funktion
+                    cols[0].info(format_entry_display(v))
                     
                     # Buttons
                     cols[1].button("📝", key=f"ed_{idx}_{i}", on_click=prepare_edit, args=(idx, label, i))
@@ -223,22 +279,18 @@ def step_verbrauch():
         st.success("Verbrauchsdaten für alle Zeiträume wurden gespeichert.")
         
     # --- Navigation ---
-
-    st.write("---") # Trennlinie zum Inhalt
-
-    # Spalten für die Buttons (50/50 Verteilung)
+    st.write("---")
     col_nav1, col_nav2 = st.columns(2)
 
     with col_nav1:
         if st.button("⬅ Zurück", use_container_width=True):
-            st.session_state.step = 2  # Gehe zurück zu step_anlass
+            st.session_state.step = 2
             st.rerun()
 
     with col_nav2:
         if st.button("Weiter zum PDF-Export ➡", type="primary", use_container_width=True):
-            # Hier könntest du prüfen, ob Einträge vorhanden sind
             if any(st.session_state.temp_perioden_data.values()):
-                st.session_state.step = 4  # Nächster Step (muss in main ergänzt werden)
+                st.session_state.step = 4
                 st.rerun()
             else:
                 st.warning("Bitte erfasse mindestens einen Verbrauchs-Eintrag, um fortzufahren.")        
