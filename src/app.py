@@ -1,6 +1,6 @@
 import streamlit as st
 from steps.step_start import step_start
-from steps.step_plz import step_plz
+from steps.step_kontakt import step_kontakt
 from steps.step_anlass import step_anlass
 from steps.step_verbrauch import step_verbrauch
 from utils.session import init_session_state
@@ -14,7 +14,7 @@ def main():
     if step == 0:
         step_start()
     elif step == 1:
-        step_plz()
+        step_kontakt()
     elif step == 2:
         step_anlass()
     elif step == 3:

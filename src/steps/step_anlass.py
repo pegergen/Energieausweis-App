@@ -1,10 +1,34 @@
 # src/steps/step_anlass.py
+from utils.helperfunctions import get_verbrauchsperioden
+from utils.db_helpers import get_klimafaktoren_for_plz
 import streamlit as st
 
 def step_anlass():
     st.header("Schritt 2: Anlass & Objektinformationen")
     st.info(f"Aktuelle Case-ID: **{st.session_state.case_id}**")
 
+    # Verbrauchsperioden abrufen
+    perioden = get_verbrauchsperioden()
+
+    # --- PLZ des Objekts schon aus SessionState holen (falls vorhanden) ---
+    plz_objekt = st.session_state.get("plz_objekt", "")
+
+    st.write("📅 Verbrauchsperioden für die Erfassung (Startdatum + Klimafaktor):")
+    
+    # Startdaten für DB-Abfrage vorbereiten
+    start_daten = [start.strftime('%Y%m%d') for _, start, _ in perioden]
+
+    klimafaktoren_dict = {}
+    if plz_objekt and len(plz_objekt) == 5 and plz_objekt.isdigit():
+        # Klimafaktoren aus der DB holen
+        klimafaktoren_dict = get_klimafaktoren_for_plz(plz_objekt, start_daten)
+
+    # Periodenliste mit Klimafaktoren anzeigen
+    for label, start, ende in perioden:
+        start_str = start.strftime('%Y%m%d')
+        kf = klimafaktoren_dict.get(start_str, None)
+        st.text(f"{start_str} | Klimafaktor: {kf if kf is not None else 'nicht verfügbar'}")
+    
     with st.form("anlass_form"):
         # 1️⃣ Anlass
         anlass = st.radio(
@@ -14,9 +38,9 @@ def step_anlass():
         )
 
         # 2️⃣ PLZ des Objekts
-        plz_objekt = st.text_input(
+        plz_objekt_input = st.text_input(
             "PLZ des Objekts",
-            value=st.session_state.get("plz_objekt", ""),
+            value=plz_objekt,
             max_chars=5
         )
 
@@ -67,12 +91,12 @@ def step_anlass():
 
     if btn_next:
         # Validierung PLZ
-        if not plz_objekt or not plz_objekt.isdigit() or len(plz_objekt) != 5:
+        if not plz_objekt_input or not plz_objekt_input.isdigit() or len(plz_objekt_input) != 5:
             st.warning("Bitte eine gültige 5-stellige PLZ des Objekts eingeben.")
         else:
             # Daten im Session State speichern
             st.session_state.anlass = anlass
-            st.session_state.plz_objekt = plz_objekt
+            st.session_state.plz_objekt = plz_objekt_input
             st.session_state.gebaeudeart = gebaeudeart
             st.session_state.baujahr = baujahr
             st.session_state.anzahl_wohnungen = anzahl_wohnungen

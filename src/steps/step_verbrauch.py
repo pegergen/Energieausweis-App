@@ -22,17 +22,30 @@ WW_NUR = "Nur Warmwasser-Verbrauch (keine Heizung)"
 WW_OPTIONEN = [NICHT_AUSGEWAEHLT, WW_INKLUSIVE, WW_PAUSCHALE, WW_SEPARAT, WW_NUR]
 
 # --- HILFSFUNKTIONEN ---
-def get_verbrauchsperioden():
-    heute = date.today()
-    ref_jahr = heute.year - 1 if heute.month < 6 else heute.year
-    perioden = []
-    for i in range(2, -1, -1):
-        start = date(ref_jahr - i - 1, 6, 1)
-        ende = date(ref_jahr - i, 5, 31)
-        if ende > heute: ende = heute
-        label = f"{start.strftime('%m.%Y')} - {ende.strftime('%m.%Y')}"
-        perioden.append((label, start, ende))
-    return perioden
+from utils.helperfunctions import get_verbrauchsperioden
+
+# Klimafaktor-Import mit detailliertem Debugging
+KLIMAFAKTOR_AVAILABLE = False  # WICHTIG: Immer vorher definieren!
+
+try:
+    from utils.db_helpers import get_klimafaktoren_for_plz
+    KLIMAFAKTOR_AVAILABLE = True
+    print("✅ get_klimafaktoren_for_plz erfolgreich importiert")
+except ImportError as e:
+    print(f"❌ Import-Fehler: {e}")
+    def get_klimafaktoren_for_plz(plz, start_daten):
+        """Fallback-Funktion falls Import fehlschlägt"""
+        return {}
+except AttributeError as e:
+    print(f"❌ Funktion existiert nicht in db_helpers.py: {e}")
+    def get_klimafaktoren_for_plz(plz, start_daten):
+        """Fallback-Funktion falls Funktion nicht existiert"""
+        return {}
+except Exception as e:
+    print(f"❌ Unerwarteter Fehler beim Import: {type(e).__name__}: {e}")
+    def get_klimafaktoren_for_plz(plz, start_daten):
+        """Fallback-Funktion bei sonstigen Fehlern"""
+        return {}
 
 def format_entry_display(v):
     """Formatiert einen Verbrauchseintrag für die Historie-Anzeige."""
@@ -172,6 +185,11 @@ def add_to_temp_and_reset(idx, label):
 # --- HAUPTFUNKTION ---
 def step_verbrauch():
     st.title("🌡 Energieausweis – Verbrauchserfassung")
+    
+    # Debug-Info (kann später entfernt werden)
+    if not KLIMAFAKTOR_AVAILABLE:
+        st.warning("⚠️ Klimafaktor-Feature nicht verfügbar. Prüfe ob die Funktion `get_klimafaktoren_for_plz` in `utils/db_helpers.py` existiert.")
+    
     perioden = get_verbrauchsperioden()
 
     # Initialisierung Session State
@@ -188,6 +206,23 @@ def step_verbrauch():
 
     for idx, (label, start, ende) in enumerate(perioden):
         with tabs[idx]:
+            # Klimafaktor aus DB abrufen, falls PLZ gesetzt ist UND Funktion verfügbar
+            if KLIMAFAKTOR_AVAILABLE:
+                plz_objekt = st.session_state.get("plz_objekt")
+                if plz_objekt:
+                    von_datum_str = start.strftime('%Y%m%d')
+                    try:
+                        # Funktion erwartet eine LISTE von Daten, also übergeben wir [von_datum_str]
+                        result = get_klimafaktoren_for_plz(plz_objekt, [von_datum_str])
+                        kf = result.get(von_datum_str) if result else None
+                        
+                        if kf is not None:
+                            st.info(f"🌡 Klimafaktor für PLZ {plz_objekt}, Start {von_datum_str}: **{kf}**")
+                        else:
+                            st.warning(f"⚠️ Kein Klimafaktor für PLZ {plz_objekt} und Start {von_datum_str} gefunden.")
+                    except Exception as e:
+                        st.error(f"❌ Fehler beim Abrufen des Klimafaktors: {type(e).__name__}: {e}")
+            
             if f"edit_mode_{idx}" not in st.session_state: st.session_state[f"edit_mode_{idx}"] = False
             is_ed = st.session_state[f"edit_mode_{idx}"]
 

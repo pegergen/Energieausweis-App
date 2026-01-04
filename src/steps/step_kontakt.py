@@ -1,7 +1,7 @@
 import streamlit as st
 
-def step_plz():
-    st.header("Schritt 1: Kontakt- und Gebäudedaten")
+def step_kontakt():
+    st.header("Schritt 1: Kontaktdaten")
     st.info(f"Aktuelle Case-ID: **{st.session_state.case_id}**")
     with st.form("plz_form"):
         col1, col2 = st.columns(2)
